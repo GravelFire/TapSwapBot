@@ -104,12 +104,6 @@ def escape_html(text: str) -> str:
     text = str(text)
     return text.replace('<', '\\<').replace('>', '\\>')
 
-
-web_options = ChromeOptions
-web_service = ChromeService
-web_manager = ChromeDriverManager
-web_driver = webdriver.Chrome
-
 if not pathlib.Path("webdriver").exists() or len(list(pathlib.Path("webdriver").iterdir())) == 0:
     logger.info("Downloading webdriver. It may take some time...")
     pathlib.Path("webdriver").mkdir(parents=True, exist_ok=True)
@@ -117,92 +111,46 @@ if not pathlib.Path("webdriver").exists() or len(list(pathlib.Path("webdriver").
     shutil.move(webdriver_path, f"webdriver/{webdriver_path.name}")
     logger.info("Webdriver downloaded successfully")
 
-webdriver_path = next(pathlib.Path("webdriver").iterdir()).as_posix()
+def tapswap_driver(proxy_options):
+    chrome_options = ChromeOptions()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--log-level=3")
+    chrome_options.add_argument("--disable-notifications")
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
 
-device_metrics = {"width": 375, "height": 812, "pixelRatio": 3.0}
-user_agent = "Mozilla/5.0 (Linux; Android 13; RMX3630 Build/TP1A.220905.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/125.0.6422.165 Mobile Safari/537.36"
+    if os.name == 'posix':
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
 
-mobile_emulation = {
-    "deviceMetrics": device_metrics,
-    "userAgent": user_agent,
-}
-
-options = web_options()
-
-options.add_experimental_option("mobileEmulation", mobile_emulation)
-
-options.add_argument("--headless")
-options.add_argument("--log-level=3")
-if os.name == 'posix':
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
+    mobile_emulation = {
+        "deviceMetrics": {"width": 375, "height": 812, "pixelRatio": 3.0},
+        "userAgent": "Mozilla/5.0 (Linux; Android 13; SM-A515F Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.6478.134 Mobile Safari/537.36"
+    }
+    chrome_options.add_experimental_option("mobileEmulation", mobile_emulation)
+    return webdriver.Chrome(service=ChromeService(next(pathlib.Path("webdriver").iterdir()).as_posix()),
+                            options=chrome_options, seleniumwire_options=proxy_options)
 
 driver = None
 
 session_queue = Queue()
 
+def safe_qsize(queue: Queue) -> int:
+    try:
+        return queue.qsize()
+    except NotImplementedError:
+        # Alternative way to count items if qsize() is not implemented
+        count = 0
+        while not queue.empty():
+            queue.get()
+            count += 1
+        # Re-populate the queue
+        for _ in range(count):
+            queue.put(1)
+        return count
 
-def extract_chq(chq: str) -> int:
-    global driver
-
-    if driver is None:
-        driver = web_driver(service=web_service(webdriver_path), options=options)
-
-    chq_length = len(chq)
-
-    bytes_array = bytearray(chq_length // 2)
-    xor_key = 157
-
-    for i in range(0, chq_length, 2):
-        bytes_array[i // 2] = int(chq[i:i + 2], 16)
-
-    xor_bytes = bytearray(t ^ xor_key for t in bytes_array)
-    decoded_xor = xor_bytes.decode('utf-8')
-
-    driver.execute_script("""
-        window.ctx = {}
-        window.ctx.api = {}
-        window.ctx.d_headers = new Map()
-        window.ctx.api.setHeaders = function(entries) { for (const [W, U] of Object.entries(entries)) window.ctx.d_headers.set(W, U) }
-        var chrStub = document.createElement("div");
-        chrStub.id = "_chr_";
-        document.body.appendChild(chrStub);
-    """)
-
-    fixed_xor = repr(decoded_xor).replace("`", "\\`")
-
-    chr_key = driver.execute_script(f"""
-        try {{
-            return eval(`{fixed_xor[1:-1]}`);
-        }} catch (e) {{
-            return e;
-        }}
-    """)
-
-    cache_id = driver.execute_script(f"""
-        try {{
-            return window.ctx.d_headers.get('Cache-Id');
-        }} catch (e) {{
-            return e;
-        }}
-    """)
-
-    session_queue.put(1)
-
-    if len(get_session_names()) == session_queue.qsize():
-        logger.info("All sessions are closed. Quitting driver...")
-        driver.quit()
-        driver = None
-        while session_queue.qsize() > 0:
-            session_queue.get()
-
-    return chr_key, cache_id
-
-
-# Other way
 def login_in_browser(auth_url: str, proxy: str) -> tuple[str, str, str]:
     global driver
-
     if driver is None:
         if proxy:
             proxy_options = {
@@ -214,14 +162,14 @@ def login_in_browser(auth_url: str, proxy: str) -> tuple[str, str, str]:
         else:
             proxy_options = None
 
-        driver = web_driver(service=web_service(webdriver_path), options=options, seleniumwire_options=proxy_options)
+        driver = tapswap_driver(proxy_options)
 
     driver.get(auth_url)
 
     time.sleep(random.randint(7, 15))
 
     try:
-        skip_button = driver.find_element(By.XPATH, '//*[@id="app"]/div[2]/button')
+        skip_button = driver.find_element(By.CSS_SELECTOR, '#app > div:nth-of-type(2)')
         if skip_button:
             skip_button.click()
             time.sleep(random.randint(2, 5))
@@ -229,9 +177,9 @@ def login_in_browser(auth_url: str, proxy: str) -> tuple[str, str, str]:
         ...
 
     try:
-        coin = driver.find_element(By.XPATH, '//*[@id="ex1-layer"]')
-        if coin:
-            coin.click()
+        coin_button = driver.find_element(By.CSS_SELECTOR, '#ex1-layer')
+        if coin_button:
+            coin_button.click()
     except:
         ...
 
@@ -243,10 +191,10 @@ def login_in_browser(auth_url: str, proxy: str) -> tuple[str, str, str]:
 
     for request in driver.requests:
         request_body = request.body.decode('utf-8')
-        if request.url == "https://api.tapswap.ai/api/account/login" and 'chr' in request_body:
+        if request.url == "https://api.tapswap.club/api/account/challenge":
             response_text = request.response.body.decode('utf-8')
 
-        if request.url == "https://api.tapswap.ai/api/player/submit_taps":
+        if request.url == "https://api.tapswap.club/api/player/submit_taps":
             headers = dict(request.headers.items())
             x_cv = headers.get('X-Cv') or headers.get('x-cv')
             x_touch = headers.get('X-Touch', '') or headers.get('x-touch', '')
@@ -254,10 +202,10 @@ def login_in_browser(auth_url: str, proxy: str) -> tuple[str, str, str]:
     session_queue.put(1)
 
     if len(get_session_names()) == session_queue.qsize():
-        logger.info("All sessions are closed. Quitting driver...")
         driver.quit()
         driver = None
         while session_queue.qsize() > 0:
             session_queue.get()
 
     return response_text, x_cv, x_touch
+    
