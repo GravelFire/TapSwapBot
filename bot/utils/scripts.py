@@ -19,6 +19,7 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 from webdriver_manager.chrome import ChromeDriverManager
 
 from bot.config import settings
+
 from bot.utils import logger
 from bot.utils.emojis import num, StaticEmoji
 
@@ -107,7 +108,7 @@ def escape_html(text: str) -> str:
 if not pathlib.Path("webdriver").exists() or len(list(pathlib.Path("webdriver").iterdir())) == 0:
     logger.info("Downloading webdriver. It may take some time...")
     pathlib.Path("webdriver").mkdir(parents=True, exist_ok=True)
-    webdriver_path = pathlib.Path(web_manager().install())
+    webdriver_path = pathlib.Path(ChromeDriverManager().install())
     shutil.move(webdriver_path, f"webdriver/{webdriver_path.name}")
     logger.info("Webdriver downloaded successfully")
 
